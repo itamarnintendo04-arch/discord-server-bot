@@ -113,7 +113,7 @@ async def help_command(interaction: discord.Interaction):
     if interaction.user.guild_permissions.administrator:
         help_text += (
             "\n🛡️ **SERVER TEAM (Admin Commands):**\n\n"
-            "`/giveaway [prize] [duration/fast] [winners]` - Start a giveaway (type 'fast' in duration for instant fastest-fingers mode).\n"
+            "`/giveaway [prize] [duration] [winners]` - Start a giveaway (leave duration empty or type 'fast' for instant fastest-fingers mode).\n"
             "`/clear [amount]` - Delete multiple messages in the channel.\n"
             "`/modpanel` - Open the admin control buttons."
         )
@@ -190,19 +190,7 @@ class SmartGiveawayView(discord.ui.View):
         self.ended = False
         self.message_ref = message_ref
 
-    def update_button_label(self):
-        for child in self.children:
-            if child.custom_id == "gw_enter":
-                if self.is_fast_mode:
-                    child.label = f"Claim Prize ⚡ ({len(self.participants)}/{self.max_winners})"
-                else:
-                    child.label = f"Enter Giveaway 🎉 ({len(self.participants)})"
-                
-                if self.ended:
-                    child.disabled = True
-                break
-
-    @discord.ui.button(label="Enter Giveaway 🎉 (0)", style=discord.ButtonStyle.green, custom_id="gw_enter")
+    @discord.ui.button(label="Enter Giveaway 🎉", style=discord.ButtonStyle.green, custom_id="gw_enter")
     async def enter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.ended:
             await interaction.response.send_message("This giveaway has already ended!", ephemeral=True)
@@ -214,7 +202,6 @@ class SmartGiveawayView(discord.ui.View):
             await interaction.response.send_message(msg, ephemeral=True)
         else:
             self.participants.append(user_id)
-            self.update_button_label()
 
             # If fast mode reached max winners, end immediately!
             if self.is_fast_mode and len(self.participants) >= self.max_winners:
@@ -229,7 +216,7 @@ class SmartGiveawayView(discord.ui.View):
 
             if self.is_fast_mode and self.ended and self.message_ref:
                 mentions = ", ".join(f"<@{w}>" for w in self.participants)
-                await self.message_ref.reply(f"⚡ **Fastest fingers first!** Winners: {mentions} won **the prize**! 🎉")
+                await self.message_ref.reply(f"⚡ **Fastest fingers first!** Winner: {mentions} won **the prize**! 🎉")
                 await interaction.followup.send("You secured your spot and won!", ephemeral=True)
             else:
                 success_msg = "You claimed a spot successfully!" if self.is_fast_mode else "You entered the giveaway successfully!"
@@ -244,7 +231,6 @@ class SmartGiveawayView(discord.ui.View):
         user_id = interaction.user.id
         if user_id in self.participants:
             self.participants.remove(user_id)
-            self.update_button_label()
             try:
                 await interaction.response.edit_message(view=self)
             except Exception:
@@ -256,32 +242,29 @@ class SmartGiveawayView(discord.ui.View):
 @bot.tree.command(name="giveaway", description="Start a giveaway (Admin only)")
 @app_commands.describe(
     prize="What is the prize?", 
-    duration="Type time (e.g. 10M, 2H) OR type 'fast' for instant fastest-fingers mode",
-    winners="Number of winners"
+    duration="Leave empty or type 'fast' for instant fastest-fingers mode (otherwise enter time like 10M, 2H)",
+    winners="Number of winners (leave empty for fast mode default: 1)"
 )
-async def start_giveaway(interaction: discord.Interaction, prize: str, duration: str, winners: int):
+async def start_giveaway(interaction: discord.Interaction, prize: str, duration: str = "fast", winners: int = 1):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
 
-    is_fast_mode = duration.strip().lower() == "fast"
+    is_fast_mode = duration is None or duration.strip().lower() == "fast"
 
     if not is_fast_mode:
         try:
             duration_seconds = parse_duration(duration)
         except Exception:
-            await interaction.response.send_message("Invalid duration format! Use M, H, D, MO or type 'fast'.", ephemeral=True)
+            await interaction.response.send_message("Invalid duration format! Use M, H, D, MO or leave empty / type 'fast'.", ephemeral=True)
             return
 
     view = SmartGiveawayView(is_fast_mode=is_fast_mode, max_winners=winners)
-    if is_fast_mode:
-        view.update_button_label()
-
     await interaction.response.send_message(f"Starting giveaway for '{prize}'...", ephemeral=True)
 
     if is_fast_mode:
         msg = await interaction.channel.send(
-            f"⚡ **FASTEST FINGERS GIVEAWAY** ⚡\n**Prize:** {prize}\n**Required Winners:** {winners}\n*First {winners} people to click win instantly!*", 
+            f"⚡ **FASTEST FINGERS GIVEAWAY** ⚡\n**Prize:** {prize}\n*First person to click the button wins instantly!*", 
             view=view
         )
     else:
