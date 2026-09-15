@@ -37,8 +37,9 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 last_video_id = None
 
-# --- In-Memory Databases for Items and XP ---
+# --- In-Memory Databases for Items, Coins and XP ---
 item_shop_db = {}  # Format: {item_name: price}
+user_coins_db = {} # Format: {user_id: coins_amount}
 user_xp_db = {}    # Format: {user_id: xp_amount}
 
 # --- Helper Function: Parse Time ---
@@ -113,16 +114,19 @@ async def help_command(interaction: discord.Interaction):
         "🤖 **Public Bot Commands:**\n\n"
         "`/ping` - Check if the bot is alive and its latency.\n"
         "`/serverinfo` - Display information about this server.\n"
+        "`/xp check` - Check your own XP level.\n"
+        "`/coins check` - Check your own balance.\n"
     )
 
     if interaction.user.guild_permissions.administrator:
         help_text += (
             "\n🛡️ **SERVER TEAM (Admin Commands):**\n\n"
-            "`/giveaway` - Start a giveaway (leave duration empty or type 'fast' for instant mode).\n"
+            "`/giveaway` - Start a giveaway (timed or fast mode).\n"
             "`/clear [amount]` - Delete multiple messages.\n"
             "`/modpanel` - Open admin control panel.\n"
             "`/itemshop add/remove/view` - Item Shop management.\n"
-            "`/xp add/remove/check` - XP management system."
+            "`/coins add/remove/check [user]` - Manage or check anyone's coins.\n"
+            "`/xp add/remove/check [user]` - Manage or check anyone's XP."
         )
 
     await interaction.response.send_message(help_text, ephemeral=True)
@@ -147,7 +151,7 @@ async def serverinfo_command(interaction: discord.Interaction):
     await interaction.response.send_message(info, ephemeral=True)
 
 # ==========================================
-#         ADMIN COMMANDS (Staff Only)
+#         ADMIN COMMANDS & SYSTEMS
 # ==========================================
 
 @bot.tree.command(name="clear", description="Clear multiple messages (Admin only)")
@@ -161,7 +165,7 @@ async def clear_command(interaction: discord.Interaction, amount: int):
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.followup.send(f"🧹 Successfully deleted {len(deleted)} messages.", ephemeral=True)
 
-# --- Item Shop Group ---
+# --- Item Shop Group (Admin Only) ---
 itemshop_group = app_commands.Group(name="itemshop", description="Manage item shop (Admin only)")
 
 @itemshop_group.command(name="add", description="Add an item to the shop")
@@ -187,21 +191,57 @@ async def itemshop_remove(interaction: discord.Interaction, item_name: str):
 
 @itemshop_group.command(name="view", description="View all items in the shop")
 async def itemshop_view(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
-        return
     if not item_shop_db:
-        await interaction.response.send_message("🛒 The item shop is currently empty.", ephemeral=True)
+        await interaction.response.send_message("🛒 The item shop is currently empty.")
     else:
         shop_list = "\n".join([f"• **{item}** - {price} coins" for item, price in item_shop_db.items()])
-        await interaction.response.send_message(f"🛒 **Server Item Shop:**\n\n{shop_list}", ephemeral=True)
+        await interaction.response.send_message(f"🛒 **Server Item Shop:**\n\n{shop_list}")
 
 bot.tree.add_command(itemshop_group)
 
-# --- XP System Group ---
-xp_group = app_commands.Group(name="xp", description="Manage user XP system (Admin only)")
+# --- Coins System Group ---
+coins_group = app_commands.Group(name="coins", description="Manage or check coins")
 
-@xp_group.command(name="add", description="Add XP to a user")
+@coins_group.command(name="add", description="Add coins to a user (Admin only)")
+@app_commands.describe(user="The user to give coins to", amount="Amount of coins")
+async def coins_add(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    user_coins_db[user.id] = user_coins_db.get(user.id, 0) + amount
+    await interaction.response.send_message(f"🪙 Successfully added **{amount} coins** to {user.mention}. Total: **{user_coins_db[user.id]}** coins", ephemeral=True)
+
+@coins_group.command(name="remove", description="Remove coins from a user (Admin only)")
+@app_commands.describe(user="The user to take coins from", amount="Amount of coins")
+async def coins_remove(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    current_coins = user_coins_db.get(user.id, 0)
+    new_coins = max(0, current_coins - amount)
+    user_coins_db[user.id] = new_coins
+    await interaction.response.send_message(f"🪙 Successfully removed **{amount} coins** from {user.mention}. Total: **{new_coins}** coins", ephemeral=True)
+
+@coins_group.command(name="check", description="Check user coins balance")
+@app_commands.describe(user="The user to check (Admin only to check others, everyone for self)")
+async def coins_check(interaction: discord.Interaction, user: discord.Member = None):
+    if user is not None and user.id != interaction.user.id:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🚫 **Access Denied:** Only admins can check other users' balance.", ephemeral=True)
+            return
+        target = user
+    else:
+        target = interaction.user
+    
+    coins = user_coins_db.get(target.id, 0)
+    await interaction.response.send_message(f"🪙 **{target.display_name}'s Balance:** {coins} coins")
+
+bot.tree.add_command(coins_group)
+
+# --- XP System Group ---
+xp_group = app_commands.Group(name="xp", description="Manage or check user XP")
+
+@xp_group.command(name="add", description="Add XP to a user (Admin only)")
 @app_commands.describe(user="The user to give XP to", amount="Amount of XP")
 async def xp_add(interaction: discord.Interaction, user: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator:
@@ -210,7 +250,7 @@ async def xp_add(interaction: discord.Interaction, user: discord.Member, amount:
     user_xp_db[user.id] = user_xp_db.get(user.id, 0) + amount
     await interaction.response.send_message(f"⭐ Successfully added **{amount} XP** to {user.mention}. Total XP: **{user_xp_db[user.id]}**", ephemeral=True)
 
-@xp_group.command(name="remove", description="Remove XP from a user")
+@xp_group.command(name="remove", description="Remove XP from a user (Admin only)")
 @app_commands.describe(user="The user to take XP from", amount="Amount of XP")
 async def xp_remove(interaction: discord.Interaction, user: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator:
@@ -222,14 +262,18 @@ async def xp_remove(interaction: discord.Interaction, user: discord.Member, amou
     await interaction.response.send_message(f"⭐ Successfully removed **{amount} XP** from {user.mention}. Total XP: **{new_xp}**", ephemeral=True)
 
 @xp_group.command(name="check", description="Check user XP")
-@app_commands.describe(user="The user to check (optional)")
+@app_commands.describe(user="The user to check (Admin only to check others, everyone for self)")
 async def xp_check(interaction: discord.Interaction, user: discord.Member = None):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
-        return
-    target = user if user else interaction.user
+    if user is not None and user.id != interaction.user.id:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🚫 **Access Denied:** Only admins can check other users' XP.", ephemeral=True)
+            return
+        target = user
+    else:
+        target = interaction.user
+    
     xp = user_xp_db.get(target.id, 0)
-    await interaction.response.send_message(f"⭐ **{target.display_name}'s XP:** {xp} XP", ephemeral=True)
+    await interaction.response.send_message(f"⭐ **{target.display_name}'s XP:** {xp} XP")
 
 bot.tree.add_command(xp_group)
 
