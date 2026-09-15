@@ -37,6 +37,10 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 last_video_id = None
 
+# --- In-Memory Databases for Items and XP (Mock Storage) ---
+item_shop_db = {}  # Format: {item_name: price}
+user_xp_db = {}    # Format: {user_id: xp_amount}
+
 # --- Helper Function: Parse Time ---
 def parse_duration(duration_str: str) -> int:
     duration_str = duration_str.upper()
@@ -113,11 +117,11 @@ async def help_command(interaction: discord.Interaction):
     if interaction.user.guild_permissions.administrator:
         help_text += (
             "\n🛡️ **SERVER TEAM (Admin Commands):**\n\n"
-            "`/giveaway [prize] [duration] [winners]` - Start a giveaway (leave duration empty or type 'fast' for instant mode).\n"
-            "`/clear [amount]` - Delete multiple messages in the channel.\n"
-            "`/modpanel` - Open the admin control buttons.\n"
-            "`/itemshop` - UnbelievaBoat Item Shop shortcut.\n"
-            "`/xp` - Arcane bot XP shortcut."
+            "`/giveaway` - Start a giveaway (timed or fast mode).\n"
+            "`/clear [amount]` - Delete multiple messages.\n"
+            "`/modpanel` - Open admin control panel.\n"
+            "`/itemshop add/remove/view` - UnbelievaBoat Item Shop management.\n"
+            "`/xp add/remove/check` - Arcane XP management system."
         )
 
     await interaction.response.send_message(help_text, ephemeral=True)
@@ -156,25 +160,83 @@ async def clear_command(interaction: discord.Interaction, amount: int):
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.followup.send(f"🧹 Successfully deleted {len(deleted)} messages.", ephemeral=True)
 
-@bot.tree.command(name="itemshop", description="Open UnbelievaBoat Item Shop (Admin only)")
-async def itemshop_command(interaction: discord.Interaction):
+# --- UnbelievaBoat Style Item Shop Group ---
+itemshop_group = app_commands.Group(name="itemshop", description="Manage item shop (Admin only)")
+
+@itemshop_group.command(name="add", description="Add an item to the shop")
+@app_commands.describe(item_name="Name of the item", price="Price of the item")
+async def itemshop_add(interaction: discord.Interaction, item_name: str, price: int):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
     
-    # Sends UnbelievaBoat store command or info
-    await interaction.response.send_message("🛒 **UnbelievaBoat Item Shop:**\nType `!store` to view available items in the shop.", ephemeral=True)
+    item_shop_db[item_name] = price
+    await interaction.response.send_message(f"🛒 Successfully added **{item_name}** to the shop for **{price}** coins!", ephemeral=True)
 
-@bot.tree.command(name="xp", description="Check Arcane XP system (Admin only)")
-@app_commands.describe(user="Check XP for a specific user (optional)")
-async def xp_command(interaction: discord.Interaction, user: discord.Member = None):
+@itemshop_group.command(name="remove", description="Remove an item from the shop")
+@app_commands.describe(item_name="Name of the item to remove")
+async def itemshop_remove(interaction: discord.Interaction, item_name: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    
+    if item_name in item_shop_db:
+        del item_shop_db[item_name]
+        await interaction.response.send_message(f"🗑️ Successfully removed **{item_name}** from the shop.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ Item **{item_name}** not found in the shop.", ephemeral=True)
+
+@itemshop_group.command(name="view", description="View all items in the shop")
+async def itemshop_view(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    
+    if not item_shop_db:
+        await interaction.response.send_message("🛒 The item shop is currently empty.", ephemeral=True)
+    else:
+        shop_list = "\n".join([f"• **{item}** - {price} coins" for item, price in item_shop_db.items()])
+        await interaction.response.send_message(f"🛒 **Server Item Shop:**\n\n{shop_list}", ephemeral=True)
+
+bot.tree.add_command(itemshop_group)
+
+# --- Arcane Style XP System Group ---
+xp_group = app_commands.Group(name="xp", description="Manage user XP system (Admin only)")
+
+@xp_group.command(name="add", description="Add XP to a user")
+@app_commands.describe(user="The user to give XP to", amount="Amount of XP")
+async def xp_add(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    
+    user_xp_db[user.id] = user_xp_db.get(user.id, 0) + amount
+    await interaction.response.send_message(f"⭐ Successfully added **{amount} XP** to {user.mention}. Total XP: **{user_xp_db[user.id]}**", ephemeral=True)
+
+@xp_group.command(name="remove", description="Remove XP from a user")
+@app_commands.describe(user="The user to take XP from", amount="Amount of XP")
+async def xp_remove(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    
+    current_xp = user_xp_db.get(user.id, 0)
+    new_xp = max(0, current_xp - amount)
+    user_xp_db[user.id] = new_xp
+    await interaction.response.send_message(f"⭐ Successfully removed **{amount} XP** from {user.mention}. Total XP: **{new_xp}**", ephemeral=True)
+
+@xp_group.command(name="check", description="Check user XP")
+@app_commands.describe(user="The user to check (optional)")
+async def xp_check(interaction: discord.Interaction, user: discord.Member = None):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
     
     target = user if user else interaction.user
-    # Shortcut message pointing to Arcane bot usage
-    await interaction.response.send_message(f"⭐ **Arcane XP System:**\nTo check rank/XP for {target.mention}, use Arcane's command `!rank {target.id}` or check the leaderboard.", ephemeral=True)
+    xp = user_xp_db.get(target.id, 0)
+    await interaction.response.send_message(f"⭐ **{target.display_name}'s XP:** {xp} XP", ephemeral=True)
+
+bot.tree.add_command(xp_group)
 
 class AdminPanelView(discord.ui.View):
     def __init__(self):
@@ -303,7 +365,6 @@ async def start_giveaway(interaction: discord.Interaction, prize: str, duration:
             elapsed += 1
 
         if not view.ended:
-            view.ended =Thread(target=run_web).start() # keeping loop safe
             view.ended = True
             for child in view.children:
                 child.disabled = True
