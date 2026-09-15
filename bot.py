@@ -5,6 +5,7 @@ import asyncio
 import random
 import os
 import re
+import feedparser  # <-- ספרייה חדשה לקריאת עדכוני יוטיוב
 from flask import Flask
 from threading import Thread
 
@@ -26,12 +27,19 @@ Thread(target=run_web).start()
 WELCOME_CHANNEL_ID = 1541358114538913994   
 YOUTUBE_CHANNEL_ID = 1539906472169832559   
 
+# שים כאן את הקישור לערוץ היוטיוב שלך (בפורמט ה-RSS המצורף למטה)
+# דוגמה: "https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID_HERE"
+YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=YOUR_YOUTUBE_CHANNEL_ID"
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  
 intents.guilds = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+# משתנה לשמירת הסרטון האחרון שפורסם כדי לא לשלוח פעמיים
+last_video_id = None
 
 # --- Helper Function: Parse Time ---
 def parse_duration(duration_str: str) -> int:
@@ -57,8 +65,8 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
     
-    if not youtube_notification_task.is_running():
-        youtube_notification_task.start()
+    if not youtube_checker_task.is_running():
+        youtube_checker_task.start()
 
 @bot.event
 async def on_member_join(member):
@@ -66,14 +74,33 @@ async def on_member_join(member):
     if channel:
         await channel.send(f"Welcome to the server, {member.mention}! We are glad to have you here. 🎉")
 
-# --- Background Tasks ---
-@tasks.loop(hours=24)
-async def youtube_notification_task():
+# --- Background Task: YouTube Checker ---
+@tasks.loop(minutes=10) # בודק כל 10 דקות האם עלה סרטון חדש
+async def youtube_checker_task():
+    global last_video_id
     channel = bot.get_channel(YOUTUBE_CHANNEL_ID)
-    if channel:
-        pass 
+    if not channel:
+        return
 
-@youtube_notification_task.before_loop
+    try:
+        # קריאת ה-RSS של ערוץ היוטיוב
+        feed = feedparser.parse(YOUTUBE_RSS_URL)
+        if feed.entries:
+            latest_video = feed.entries[0]
+            video_id = latest_video.id
+            video_link = latest_video.link
+            video_title = latest_video.title
+
+            # אם זה סרטון חדש לגמרי שעוד לא פורסם בדיסקורד
+            if last_video_id is None:
+                last_video_id = video_id  # בפעם הראשונה רק שומרים כדי לא להציף בסרטונים ישנים
+            elif last_video_id != video_id:
+                last_video_id = video_id
+                await channel.send(f"🚨 **New Video Uploaded!** 🚨\n**{video_title}**\n{video_link}")
+    except Exception as e:
+        print(f"Error checking YouTube RSS: {e}")
+
+@youtube_checker_task.before_loop
 async def before_youtube_task():
     await bot.wait_until_ready()
 
@@ -84,18 +111,16 @@ async def before_youtube_task():
 
 @bot.tree.command(name="help", description="Show all available bot commands")
 async def help_command(interaction: discord.Interaction):
-    # Base help text for everyone
     help_text = (
         "🤖 **Public Bot Commands:**\n\n"
         "`/ping` - Check if the bot is alive and its latency.\n"
         "`/serverinfo` - Display information about this server.\n"
     )
 
-    # If the user is an admin, add the SERVER TEAM section dynamically!
     if interaction.user.guild_permissions.administrator:
         help_text += (
             "\n🛡️ **SERVER TEAM (Admin Commands):**\n\n"
-            "`/giveaway [prize] [duration] [winners]` - Start a giveaway.\n"
+            "`/giveaway [prize] [duration] [winners] [mode]` - Start a giveaway.\n"
             "`/clear [amount]` - Delete multiple messages in the channel.\n"
             "`/modpanel` - Open the admin control buttons."
         )
@@ -138,8 +163,6 @@ async def clear_command(interaction: discord.Interaction, amount: int):
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.followup.send(f"🧹 Successfully deleted {len(deleted)} messages.", ephemeral=True)
 
-
-# --- Admin Buttons Panel ---
 class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -169,43 +192,83 @@ async def modpanel_command(interaction: discord.Interaction):
 # ==========================================
 
 class GiveawayView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, mode: str, max_winners: int, message_ref=None):
         super().__init__(timeout=None)
-        self.participants = set()
+        self.participants = [] 
+        self.mode = mode
+        self.max_winners = max_winners
+        self.ended = False
+        self.message_ref = message_ref
 
     def update_button_label(self):
         for child in self.children:
             if child.custom_id == "gw_enter":
                 child.label = f"Enter Giveaway 🎉 ({len(self.participants)})"
+                if self.ended:
+                    child.disabled = True
                 break
 
     @discord.ui.button(label="Enter Giveaway 🎉 (0)", style=discord.ButtonStyle.green, custom_id="gw_enter")
     async def enter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id in self.participants:
+        if self.ended:
+            await interaction.response.send_message("This giveaway has already ended!", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+
+        if user_id in self.participants:
             await interaction.response.send_message("You are already in the giveaway!", ephemeral=True)
         else:
-            self.participants.add(interaction.user.id)
+            self.participants.append(user_id)
             self.update_button_label()
-            await interaction.response.edit_message(view=self)
-            await interaction.followup.send("You entered the giveaway successfully!", ephemeral=True)
+            
+            if self.mode == "fastest" and len(self.participants) >= self.max_winners:
+                self.ended = True
+                for child in self.children:
+                    child.disabled = True
+
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                pass
+
+            if self.mode == "fastest" and self.ended and self.message_ref:
+                mentions = ", ".join(f"<@{w}>" for w in self.participants)
+                await self.message_ref.reply(f"⚡ **Fastest fingers first!** Congratulations {mentions}! You won! 🎉")
+                await interaction.followup.send("You secured your spot and won!", ephemeral=True)
+            else:
+                await interaction.followup.send("You entered the giveaway successfully!", ephemeral=True)
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.red, custom_id="gw_leave")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id in self.participants:
-            self.participants.remove(interaction.user.id)
+        if self.ended:
+            await interaction.response.send_message("This giveaway has already ended!", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if user_id in self.participants:
+            self.participants.remove(user_id)
             self.update_button_label()
-            await interaction.response.edit_message(view=self)
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                pass
             await interaction.followup.send("You left the giveaway.", ephemeral=True)
         else:
             await interaction.response.send_message("You are not in the giveaway.", ephemeral=True)
 
-@bot.tree.command(name="giveaway", description="Start a giveaway in this channel (Admin only)")
+@bot.tree.command(name="giveaway", description="Start a giveaway (Admin only)")
 @app_commands.describe(
     prize="What is the prize?", 
-    duration="Format: 5M (minutes), 2H (hours), 1D (days), 1MO (months)",
-    winners="Number of winners"
+    duration="Format: 5M, 2H, 1D, 1MO",
+    winners="Number of winners",
+    mode="Choose mode: random (default) or fastest"
 )
-async def start_giveaway(interaction: discord.Interaction, prize: str, duration: str, winners: int):
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Random Draw", value="random"),
+    app_commands.Choice(name="Fastest Fingers First", value="fastest")
+])
+async def start_giveaway(interaction: discord.Interaction, prize: str, duration: str, winners: int, mode: str = "random"):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
@@ -216,23 +279,42 @@ async def start_giveaway(interaction: discord.Interaction, prize: str, duration:
         await interaction.response.send_message("Invalid duration format! Use M, H, D, or MO.", ephemeral=True)
         return
 
-    view = GiveawayView()
-    await interaction.response.send_message(f"Starting giveaway for '{prize}' (Winners: {winners}, Time: {duration})...", ephemeral=True)
+    view = GiveawayView(mode=mode, max_winners=winners)
+    
+    mode_name = "⚡ Fastest Fingers" if mode == "fastest" else "🎲 Random Draw"
+    await interaction.response.send_message(f"Starting giveaway ({mode_name}) for '{prize}'...", ephemeral=True)
     
     msg = await interaction.channel.send(
-        f"🎉 **GIVEAWAY** 🎉\n**Prize:** {prize}\n**Winners:** {winners}\nEnds in **{duration}**!", 
+        f"🎉 **GIVEAWAY ({mode_name})** 🎉\n**Prize:** {prize}\n**Winners:** {winners}\nEnds in **{duration}**!", 
         view=view
     )
+    view.message_ref = msg
     
-    await asyncio.sleep(duration_seconds)
-    
-    if len(view.participants) == 0:
-        await msg.reply("Giveaway ended, but nobody entered. 😢")
-    else:
-        actual_winners_count = min(winners, len(view.participants))
-        chosen_winners = random.sample(list(view.participants), actual_winners_count)
-        mentions = ", ".join(f"<@{w}>" for w in chosen_winners)
-        await msg.reply(f"Congratulations {mentions}! You won **{prize}**! 🎉")
+    elapsed = 0
+    while elapsed < duration_seconds and not view.ended:
+        await asyncio.sleep(1)
+        elapsed += 1
+
+    if not view.ended:
+        view.ended = True
+        for child in view.children:
+            child.disabled = True
+        try:
+            await msg.edit(view=view)
+        except Exception:
+            pass
+
+        if len(view.participants) == 0:
+            await msg.reply("Giveaway ended, but nobody entered. 😢")
+        else:
+            actual_winners_count = min(winners, len(view.participants))
+            if mode == "fastest":
+                chosen_winners = view.participants[:actual_winners_count]
+            else:
+                chosen_winners = random.sample(view.participants, actual_winners_count)
+            
+            mentions = ", ".join(f"<@{w}>" for w in chosen_winners)
+            await msg.reply(f"Congratulations {mentions}! You won **{prize}**! 🎉")
 
 # ----------------------------------
 # Secure Token Execution
