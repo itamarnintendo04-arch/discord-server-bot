@@ -4,6 +4,23 @@ import asyncio
 import random
 import re
 import os
+from flask import Flask
+from threading import Thread
+
+# --- Web Server to trick Render ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Discord Bot is running 24/7!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+Thread(target=run_web).start()
+# ----------------------------------
+
 
 # ---------------------------------------------------------
 # Channel Settings - Replace with your actual channel IDs!
