@@ -23,10 +23,10 @@ def run_web():
 Thread(target=run_web).start()
 # ----------------------------------
 
-# --- Channel Settings ---
-WELCOME_CHANNEL_ID = 1541358114538913994   
-YOUTUBE_CHANNEL_ID = 1539906472169832559   
-YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=YOUR_YOUTUBE_CHANNEL_ID"
+# --- Channel Settings & IDs ---
+WELCOME_CHANNEL_ID = 1541358114538913994   # Welcome Channel ID
+YOUTUBE_CHANNEL_ID = 1539906472169832559   # YouTube Notifications Channel ID
+YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=1539906472169832559"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -37,7 +37,7 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 last_video_id = None
 
-# --- In-Memory Databases for Items and XP (Mock Storage) ---
+# --- In-Memory Databases for Items and XP ---
 item_shop_db = {}  # Format: {item_name: price}
 user_xp_db = {}    # Format: {user_id: xp_amount}
 
@@ -68,6 +68,7 @@ async def on_ready():
     if not youtube_checker_task.is_running():
         youtube_checker_task.start()
 
+# Welcome Message Event
 @bot.event
 async def on_member_join(member):
     channel = bot.get_channel(WELCOME_CHANNEL_ID)
@@ -117,11 +118,11 @@ async def help_command(interaction: discord.Interaction):
     if interaction.user.guild_permissions.administrator:
         help_text += (
             "\n🛡️ **SERVER TEAM (Admin Commands):**\n\n"
-            "`/giveaway` - Start a giveaway (timed or fast mode).\n"
+            "`/giveaway` - Start a giveaway (leave duration empty or type 'fast' for instant mode).\n"
             "`/clear [amount]` - Delete multiple messages.\n"
             "`/modpanel` - Open admin control panel.\n"
-            "`/itemshop add/remove/view` - UnbelievaBoat Item Shop management.\n"
-            "`/xp add/remove/check` - Arcane XP management system."
+            "`/itemshop add/remove/view` - Item Shop management.\n"
+            "`/xp add/remove/check` - XP management system."
         )
 
     await interaction.response.send_message(help_text, ephemeral=True)
@@ -160,7 +161,7 @@ async def clear_command(interaction: discord.Interaction, amount: int):
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.followup.send(f"🧹 Successfully deleted {len(deleted)} messages.", ephemeral=True)
 
-# --- UnbelievaBoat Style Item Shop Group ---
+# --- Item Shop Group ---
 itemshop_group = app_commands.Group(name="itemshop", description="Manage item shop (Admin only)")
 
 @itemshop_group.command(name="add", description="Add an item to the shop")
@@ -169,7 +170,6 @@ async def itemshop_add(interaction: discord.Interaction, item_name: str, price: 
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     item_shop_db[item_name] = price
     await interaction.response.send_message(f"🛒 Successfully added **{item_name}** to the shop for **{price}** coins!", ephemeral=True)
 
@@ -179,7 +179,6 @@ async def itemshop_remove(interaction: discord.Interaction, item_name: str):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     if item_name in item_shop_db:
         del item_shop_db[item_name]
         await interaction.response.send_message(f"🗑️ Successfully removed **{item_name}** from the shop.", ephemeral=True)
@@ -191,7 +190,6 @@ async def itemshop_view(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     if not item_shop_db:
         await interaction.response.send_message("🛒 The item shop is currently empty.", ephemeral=True)
     else:
@@ -200,7 +198,7 @@ async def itemshop_view(interaction: discord.Interaction):
 
 bot.tree.add_command(itemshop_group)
 
-# --- Arcane Style XP System Group ---
+# --- XP System Group ---
 xp_group = app_commands.Group(name="xp", description="Manage user XP system (Admin only)")
 
 @xp_group.command(name="add", description="Add XP to a user")
@@ -209,7 +207,6 @@ async def xp_add(interaction: discord.Interaction, user: discord.Member, amount:
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     user_xp_db[user.id] = user_xp_db.get(user.id, 0) + amount
     await interaction.response.send_message(f"⭐ Successfully added **{amount} XP** to {user.mention}. Total XP: **{user_xp_db[user.id]}**", ephemeral=True)
 
@@ -219,7 +216,6 @@ async def xp_remove(interaction: discord.Interaction, user: discord.Member, amou
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     current_xp = user_xp_db.get(user.id, 0)
     new_xp = max(0, current_xp - amount)
     user_xp_db[user.id] = new_xp
@@ -231,7 +227,6 @@ async def xp_check(interaction: discord.Interaction, user: discord.Member = None
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     target = user if user else interaction.user
     xp = user_xp_db.get(target.id, 0)
     await interaction.response.send_message(f"⭐ **{target.display_name}'s XP:** {xp} XP", ephemeral=True)
@@ -247,7 +242,6 @@ class AdminPanelView(discord.ui.View):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("🚫 **Access Denied:** You cannot use admin buttons!", ephemeral=True)
             return
-        
         await interaction.response.defer(ephemeral=True)
         await interaction.channel.purge(limit=5)
         await interaction.followup.send("Deleted 5 messages via Admin Panel.", ephemeral=True)
@@ -257,7 +251,6 @@ async def modpanel_command(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
         return
-    
     view = AdminPanelView()
     await interaction.response.send_message("🛠️ **Admin Control Panel:**\n*Only admins can click these buttons.*", view=view, ephemeral=True)
 
