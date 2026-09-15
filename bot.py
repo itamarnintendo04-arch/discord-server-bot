@@ -5,7 +5,7 @@ import asyncio
 import random
 import os
 import re
-import feedparser  # <-- ספרייה חדשה לקריאת עדכוני יוטיוב
+import feedparser  # <-- נוסף כאן!
 from flask import Flask
 from threading import Thread
 
@@ -26,9 +26,6 @@ Thread(target=run_web).start()
 # --- Channel Settings ---
 WELCOME_CHANNEL_ID = 1541358114538913994   
 YOUTUBE_CHANNEL_ID = 1539906472169832559   
-
-# שים כאן את הקישור לערוץ היוטיוב שלך (בפורמט ה-RSS המצורף למטה)
-# דוגמה: "https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID_HERE"
 YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=YOUR_YOUTUBE_CHANNEL_ID"
 
 intents = discord.Intents.default()
@@ -38,7 +35,6 @@ intents.guilds = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# משתנה לשמירת הסרטון האחרון שפורסם כדי לא לשלוח פעמיים
 last_video_id = None
 
 # --- Helper Function: Parse Time ---
@@ -75,7 +71,7 @@ async def on_member_join(member):
         await channel.send(f"Welcome to the server, {member.mention}! We are glad to have you here. 🎉")
 
 # --- Background Task: YouTube Checker ---
-@tasks.loop(minutes=10) # בודק כל 10 דקות האם עלה סרטון חדש
+@tasks.loop(minutes=10)
 async def youtube_checker_task():
     global last_video_id
     channel = bot.get_channel(YOUTUBE_CHANNEL_ID)
@@ -83,7 +79,6 @@ async def youtube_checker_task():
         return
 
     try:
-        # קריאת ה-RSS של ערוץ היוטיוב
         feed = feedparser.parse(YOUTUBE_RSS_URL)
         if feed.entries:
             latest_video = feed.entries[0]
@@ -91,9 +86,8 @@ async def youtube_checker_task():
             video_link = latest_video.link
             video_title = latest_video.title
 
-            # אם זה סרטון חדש לגמרי שעוד לא פורסם בדיסקורד
             if last_video_id is None:
-                last_video_id = video_id  # בפעם הראשונה רק שומרים כדי לא להציף בסרטונים ישנים
+                last_video_id = video_id
             elif last_video_id != video_id:
                 last_video_id = video_id
                 await channel.send(f"🚨 **New Video Uploaded!** 🚨\n**{video_title}**\n{video_link}")
@@ -103,7 +97,6 @@ async def youtube_checker_task():
 @youtube_checker_task.before_loop
 async def before_youtube_task():
     await bot.wait_until_ready()
-
 
 # ==========================================
 #         DYNAMIC HELP COMMAND
@@ -127,7 +120,6 @@ async def help_command(interaction: discord.Interaction):
 
     await interaction.response.send_message(help_text, ephemeral=True)
 
-
 # ==========================================
 #         PUBLIC COMMANDS
 # ==========================================
@@ -146,7 +138,6 @@ async def serverinfo_command(interaction: discord.Interaction):
         f"**Created On:** {guild.created_at.strftime('%Y-%m-%d')}"
     )
     await interaction.response.send_message(info, ephemeral=True)
-
 
 # ==========================================
 #         ADMIN COMMANDS (Staff Only)
@@ -185,7 +176,6 @@ async def modpanel_command(interaction: discord.Interaction):
     
     view = AdminPanelView()
     await interaction.response.send_message("🛠️ **Admin Control Panel:**\n*Only admins can click these buttons.*", view=view, ephemeral=True)
-
 
 # ==========================================
 #             GIVEAWAY SYSTEM
