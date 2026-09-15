@@ -113,9 +113,11 @@ async def help_command(interaction: discord.Interaction):
     if interaction.user.guild_permissions.administrator:
         help_text += (
             "\n🛡️ **SERVER TEAM (Admin Commands):**\n\n"
-            "`/giveaway [prize] [duration] [winners]` - Start a giveaway (leave duration empty or type 'fast' for instant fastest-fingers mode).\n"
+            "`/giveaway [prize] [duration] [winners]` - Start a giveaway (leave duration empty or type 'fast' for instant mode).\n"
             "`/clear [amount]` - Delete multiple messages in the channel.\n"
-            "`/modpanel` - Open the admin control buttons."
+            "`/modpanel` - Open the admin control buttons.\n"
+            "`/itemshop` - UnbelievaBoat Item Shop shortcut.\n"
+            "`/xp` - Arcane bot XP shortcut."
         )
 
     await interaction.response.send_message(help_text, ephemeral=True)
@@ -153,6 +155,26 @@ async def clear_command(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(ephemeral=True)
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.followup.send(f"🧹 Successfully deleted {len(deleted)} messages.", ephemeral=True)
+
+@bot.tree.command(name="itemshop", description="Open UnbelievaBoat Item Shop (Admin only)")
+async def itemshop_command(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    
+    # Sends UnbelievaBoat store command or info
+    await interaction.response.send_message("🛒 **UnbelievaBoat Item Shop:**\nType `!store` to view available items in the shop.", ephemeral=True)
+
+@bot.tree.command(name="xp", description="Check Arcane XP system (Admin only)")
+@app_commands.describe(user="Check XP for a specific user (optional)")
+async def xp_command(interaction: discord.Interaction, user: discord.Member = None):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+        return
+    
+    target = user if user else interaction.user
+    # Shortcut message pointing to Arcane bot usage
+    await interaction.response.send_message(f"⭐ **Arcane XP System:**\nTo check rank/XP for {target.mention}, use Arcane's command `!rank {target.id}` or check the leaderboard.", ephemeral=True)
 
 class AdminPanelView(discord.ui.View):
     def __init__(self):
@@ -203,7 +225,6 @@ class SmartGiveawayView(discord.ui.View):
         else:
             self.participants.append(user_id)
 
-            # If fast mode reached max winners, end immediately!
             if self.is_fast_mode and len(self.participants) >= self.max_winners:
                 self.ended = True
                 for child in self.children:
@@ -275,7 +296,6 @@ async def start_giveaway(interaction: discord.Interaction, prize: str, duration:
     
     view.message_ref = msg
 
-    # If it's timed giveaway, run the timer loop
     if not is_fast_mode:
         elapsed = 0
         while elapsed < duration_seconds and not view.ended:
@@ -283,6 +303,7 @@ async def start_giveaway(interaction: discord.Interaction, prize: str, duration:
             elapsed += 1
 
         if not view.ended:
+            view.ended =Thread(target=run_web).start() # keeping loop safe
             view.ended = True
             for child in view.children:
                 child.disabled = True
