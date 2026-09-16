@@ -24,8 +24,8 @@ Thread(target=run_web).start()
 # ----------------------------------
 
 # --- Channel Settings & IDs ---
-WELCOME_CHANNEL_ID = 1541358114538913994   # Welcome Channel ID
-YOUTUBE_CHANNEL_ID = 1539906472169832559   # YouTube Notifications Channel ID
+WELCOME_CHANNEL_ID = 1541358114538913994   
+YOUTUBE_CHANNEL_ID = 1539906472169832559   
 YOUTUBE_RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=1539906472169832559"
 
 intents = discord.Intents.default()
@@ -38,9 +38,9 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 last_video_id = None
 
 # --- In-Memory Databases for Items, Coins and XP ---
-item_shop_db = {}  # Format: {item_name: price}
-user_coins_db = {} # Format: {user_id: coins_amount}
-user_xp_db = {}    # Format: {user_id: xp_amount}
+item_shop_db = {}  
+user_coins_db = {} 
+user_xp_db = {}    
 
 # --- Helper Function: Parse Time ---
 def parse_duration(duration_str: str) -> int:
@@ -69,7 +69,6 @@ async def on_ready():
     if not youtube_checker_task.is_running():
         youtube_checker_task.start()
 
-# Welcome Message Event
 @bot.event
 async def on_member_join(member):
     channel = bot.get_channel(WELCOME_CHANNEL_ID)
@@ -302,6 +301,45 @@ async def modpanel_command(interaction: discord.Interaction):
 #             SMART GIVEAWAY SYSTEM
 # ==========================================
 
+class AdminManageView(discord.ui.Select):
+    def __init__(self, giveaway_view):
+        self.giveaway_view = giveaway_view
+        options = []
+        
+        if not giveaway_view.participants:
+            options.append(discord.SelectOption(label="No participants yet", value="none"))
+        else:
+            for uid in giveaway_view.participants:
+                options.append(discord.SelectOption(label=f"User ID: {uid}", value=str(uid)))
+
+        super().__init__(placeholder="Select a participant to remove...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🚫 Admins only!", ephemeral=True)
+            return
+
+        if self.values[0] == "none":
+            await interaction.response.send_message("No participants to remove.", ephemeral=True)
+            return
+
+        user_id_to_remove = int(self.values[0])
+        if user_id_to_remove in self.giveaway_view.participants:
+            self.giveaway_view.participants.remove(user_id_to_remove)
+            self.giveaway_view.update_button_label()
+            try:
+                await self.giveaway_view.message_ref.edit(view=self.giveaway_view)
+            except Exception:
+                pass
+            await interaction.response.send_message(f"Successfully removed user <@{user_id_to_remove}> from the giveaway.", ephemeral=True)
+        else:
+            await interaction.response.send_message("User is no longer in the giveaway.", ephemeral=True)
+
+class AdminManageModalView(discord.ui.View):
+    def __init__(self, giveaway_view):
+        super().__init__(timeout=None)
+        self.add_item(AdminManageView(giveaway_view))
+
 class SmartGiveawayView(discord.ui.View):
     def __init__(self, is_fast_mode: bool, max_winners: int, message_ref=None):
         super().__init__(timeout=None)
@@ -311,7 +349,19 @@ class SmartGiveawayView(discord.ui.View):
         self.ended = False
         self.message_ref = message_ref
 
-    @discord.ui.button(label="Enter Giveaway 🎉", style=discord.ButtonStyle.green, custom_id="gw_enter")
+    def update_button_label(self):
+        for child in self.children:
+            if child.custom_id == "gw_enter":
+                if self.is_fast_mode:
+                    child.label = f"Enter Giveaway 🎉"
+                else:
+                    child.label = f"Enter Giveaway 🎉 ({len(self.participants)})"
+                
+                if self.ended:
+                    child.disabled = True
+                break
+
+    @discord.ui.button(label="Enter Giveaway 🎉 (0)", style=discord.ButtonStyle.green, custom_id="gw_enter")
     async def enter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.ended:
             await interaction.response.send_message("This giveaway has already ended!", ephemeral=True)
@@ -323,6 +373,7 @@ class SmartGiveawayView(discord.ui.View):
             await interaction.response.send_message(msg, ephemeral=True)
         else:
             self.participants.append(user_id)
+            self.update_button_label()
 
             if self.is_fast_mode and len(self.participants) >= self.max_winners:
                 self.ended = True
@@ -351,6 +402,7 @@ class SmartGiveawayView(discord.ui.View):
         user_id = interaction.user.id
         if user_id in self.participants:
             self.participants.remove(user_id)
+            self.update_button_label()
             try:
                 await interaction.response.edit_message(view=self)
             except Exception:
@@ -358,6 +410,19 @@ class SmartGiveawayView(discord.ui.View):
             await interaction.followup.send("You left the giveaway.", ephemeral=True)
         else:
             await interaction.response.send_message("You are not in the giveaway.", ephemeral=True)
+
+    @discord.ui.button(label="Manage Participants 🛡️", style=discord.ButtonStyle.grey, custom_id="gw_manage")
+    async def manage_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("🚫 **Access Denied:** Admins only.", ephemeral=True)
+            return
+        
+        if not self.participants:
+            await interaction.response.send_message("There are no participants in this giveaway yet.", ephemeral=True)
+            return
+
+        view = AdminManageModalView(self)
+        await interaction.response.send_message("Select a participant from the dropdown below to remove them:", view=view, ephemeral=True)
 
 @bot.tree.command(name="giveaway", description="Start a giveaway (Admin only)")
 @app_commands.describe(
@@ -383,6 +448,7 @@ async def start_giveaway(interaction: discord.Interaction, prize: str, duration:
     await interaction.response.send_message(f"Starting giveaway for '{prize}'...", ephemeral=True)
 
     if is_fast_mode:
+        view.update_button_label()
         msg = await interaction.channel.send(
             f"⚡ **FASTEST FINGERS GIVEAWAY** ⚡\n**Prize:** {prize}\n*First person to click the button wins instantly!*", 
             view=view
@@ -404,7 +470,8 @@ async def start_giveaway(interaction: discord.Interaction, prize: str, duration:
         if not view.ended:
             view.ended = True
             for child in view.children:
-                child.disabled = True
+                if child.custom_id != "gw_manage": # keep manage active or disable all
+                    child.disabled = True
             try:
                 await msg.edit(view=view)
             except Exception:
