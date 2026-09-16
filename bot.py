@@ -233,7 +233,16 @@ async def create_mystore(interaction: discord.Interaction, store_name: str, cate
         "category": category,
         "items": {}
     }
-    await interaction.response.send_message(f"✅ Created store **{store_name}** under category **{category}**!", ephemeral=True)
+    
+    # הודעה חגיגית וגלויה לכולם בערוץ!
+    public_msg = (
+        f"🏪 **New Store Opened!** 🎉\n"
+        f"👤 **Owner:** {interaction.user.mention}\n"
+        f"🏷️ **Store Name:** **{store_name}**\n"
+        f"📁 **Category:** {category}\n\n"
+        f"*(Use `/mystore {store_name}` to check it out!)*"
+    )
+    await interaction.response.send_message(public_msg)
 
 @bot.tree.command(name="add-store-manager", description="Add a co-owner/manager to your store")
 @app_commands.describe(store_name="Your store name", member="Member to add as manager")
@@ -405,7 +414,7 @@ class FastGiveawayView(discord.ui.View):
         super().__init__(timeout=None)
         self.claimed = False
 
-    @discord.ui.button(label="⚡ CLAIM FAST! ⚡", style=discord.ButtonStyle.green, custom_id="gw_fast")
+    @discord.ui.button(label="⚡ CLAIM FAST! ⚡", style=discord.ButtonStyle.blurple, custom_id="gw_fast")
     async def fast_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.claimed:
             await interaction.response.send_message("Too late! Someone already claimed it.", ephemeral=True)
