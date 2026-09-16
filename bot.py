@@ -405,7 +405,7 @@ class FastGiveawayView(discord.ui.View):
         super().__init__(timeout=None)
         self.claimed = False
 
-    @discord.ui.button(label="⚡ CLAIM FAST! ⚡", style=discord.ButtonStyle.flash, custom_id="gw_fast")
+    @discord.ui.button(label="⚡ CLAIM FAST! ⚡", style=discord.ButtonStyle.green, custom_id="gw_fast")
     async def fast_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.claimed:
             await interaction.response.send_message("Too late! Someone already claimed it.", ephemeral=True)
