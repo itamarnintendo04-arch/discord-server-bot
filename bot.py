@@ -4,6 +4,7 @@ from discord import app_commands
 import asyncio
 import random
 import os
+import json
 from flask import Flask
 from threading import Thread
 
@@ -25,16 +26,40 @@ Thread(target=run_web).start()
 WELCOME_CHANNEL_ID = 1541358114538913994   
 YOUTUBE_CHANNEL_ID = 1539906472169832559   
 
-# --- Databases ---
-global_coins = {}         
-store_coins = {}          
-# admin_shop_items: { "Item Name": {"price": int, "stock": int, "link": str} }
-admin_shop_items = {      
-    "VIP Role": {"price": 100, "stock": 999, "link": "Auto-assigned by Admin"},
-    "Custom Color": {"price": 50, "stock": 999, "link": "Contact Admin for color"}
-}
-# player_shops: { "Store Name": {"owner_id": int, "managers": set(), "category": str, "items": {"Item": {"price": int, "stock": int, "link": str}}} }
-player_shops = {}         
+# --- Persistent Database System (JSON) ---
+DB_FILE = "database.json"
+
+def load_data():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Default initial database if file doesn't exist
+    return {
+        "global_coins": {},
+        "store_coins": {},
+        "admin_shop_items": {
+            "VIP Role": {"price": 100, "stock": 999, "link": "Auto-assigned by Admin"},
+            "Custom Color": {"price": 50, "stock": 999, "link": "Contact Admin for color"}
+        },
+        "player_shops": {}
+    }
+
+def save_data():
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Failed to save database: {e}")
+
+# Load database into memory
+db = load_data()
+global_coins = db["global_coins"]
+store_coins = db["store_coins"]
+admin_shop_items = db["admin_shop_items"]
+player_shops = db["player_shops"]
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -138,7 +163,7 @@ async def serverinfo_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="balance", description="Check your global and store coins")
 async def balance_command(interaction: discord.Interaction):
-    uid = interaction.user.id
+    uid = str(interaction.user.id) # JSON keys are strings
     g_coins = global_coins.get(uid, 0)
     
     msg = f"💰 **Global Coins:** {g_coins}\n"
@@ -154,14 +179,17 @@ async def balance_command(interaction: discord.Interaction):
 @app_commands.describe(member="Member to donate to", amount="Amount of coins")
 async def donate_command(interaction: discord.Interaction, member: discord.Member, amount: int):
     if amount <= 0: return await interaction.response.send_message("❌ Amount must be > 0.", ephemeral=True)
-    sender_id = interaction.user.id
+    sender_id = str(interaction.user.id)
+    receiver_id = str(member.id)
     sender_coins = global_coins.get(sender_id, 0)
 
     if sender_coins < amount: return await interaction.response.send_message(f"❌ Not enough coins! You have {sender_coins}.", ephemeral=True)
-    if member.id == sender_id: return await interaction.response.send_message("❌ You cannot donate to yourself!", ephemeral=True)
+    if member.id == interaction.user.id: return await interaction.response.send_message("❌ You cannot donate to yourself!", ephemeral=True)
 
     global_coins[sender_id] = sender_coins - amount
-    global_coins[member.id] = global_coins.get(member.id, 0) + amount
+    global_coins[receiver_id] = global_coins.get(receiver_id, 0) + amount
+    save_data()
+
     await interaction.response.send_message(f"🎁 Donated **{amount}** global coins to {member.mention}!", ephemeral=True)
 
 
@@ -182,7 +210,7 @@ class AdminShopButton(discord.ui.Button):
         self.price = price
 
     async def callback(self, interaction: discord.Interaction):
-        uid = interaction.user.id
+        uid = str(interaction.user.id)
         current = global_coins.get(uid, 0)
         item_data = admin_shop_items[self.item_name]
 
@@ -191,18 +219,16 @@ class AdminShopButton(discord.ui.Button):
 
         if current >= self.price:
             global_coins[uid] = current - self.price
-            item_data["stock"] -= 1 # Reduce stock
+            item_data["stock"] -= 1 
+            save_data()
             
-            # Green Embed Message
             embed = discord.Embed(title="🎉 Purchase Successful!", description=f"You bought **{self.item_name}**!\nRemaining balance: {global_coins[uid]} coins.", color=discord.Color.green())
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-            # DM Buyer
             try:
                 await interaction.user.send(f"🎉 Thank you for purchasing **{self.item_name}**!\n🔗 **Here is your link/info:** {item_data['link']}")
             except: pass
 
-            # DM Admins
             for member in interaction.guild.members:
                 if member.guild_permissions.administrator and not member.bot:
                     try:
@@ -232,7 +258,8 @@ async def shop_command(interaction: discord.Interaction):
 async def create_mystore(interaction: discord.Interaction, store_name: str, category: str):
     if store_name in player_shops: return await interaction.response.send_message("❌ A store with this name already exists!", ephemeral=True)
 
-    player_shops[store_name] = {"owner_id": interaction.user.id, "managers": set(), "category": category, "items": {}}
+    player_shops[store_name] = {"owner_id": interaction.user.id, "managers": [], "category": category, "items": {}}
+    save_data()
     
     public_msg = (
         f"🏪 **New Store Opened!** 🎉\n👤 **Owner:** {interaction.user.mention}\n"
@@ -244,7 +271,9 @@ async def create_mystore(interaction: discord.Interaction, store_name: str, cate
 @bot.tree.command(name="add-store-manager", description="Add a co-owner/manager to your store")
 async def add_store_manager(interaction: discord.Interaction, store_name: str, member: discord.Member):
     if not is_store_manager(interaction.user, store_name): return await interaction.response.send_message("🚫 Only the store owner or admins can do this.", ephemeral=True)
-    player_shops[store_name]["managers"].add(member.id)
+    if member.id not in player_shops[store_name]["managers"]:
+        player_shops[store_name]["managers"].append(member.id)
+        save_data()
     await interaction.response.send_message(f"✅ Added {member.mention} as a manager for **{store_name}**!", ephemeral=True)
 
 @bot.tree.command(name="add-mystore-item", description="Add item to your store")
@@ -252,6 +281,7 @@ async def add_store_manager(interaction: discord.Interaction, store_name: str, m
 async def add_mystore_item(interaction: discord.Interaction, store_name: str, item_name: str, price: int, stock: int, link: str):
     if not is_store_manager(interaction.user, store_name): return await interaction.response.send_message("🚫 You do not have permission.", ephemeral=True)
     player_shops[store_name]["items"][item_name] = {"price": price, "stock": stock, "link": link}
+    save_data()
     await interaction.response.send_message(f"✅ Added **{item_name}** (Price: {price}, Stock: {stock}) to **{store_name}**!", ephemeral=True)
 
 @bot.tree.command(name="update-mystore-item", description="Update an item's stock or link in your store")
@@ -263,13 +293,17 @@ async def update_mystore_item(interaction: discord.Interaction, store_name: str,
     item = player_shops[store_name]["items"][item_name]
     if new_stock is not None: item["stock"] = new_stock
     if new_link is not None: item["link"] = new_link
+    save_data()
     await interaction.response.send_message(f"✅ Updated **{item_name}**! New Stock: {item['stock']}, Link: {item['link']}", ephemeral=True)
 
 @bot.tree.command(name="add-store-coins", description="Give coins valid ONLY in your store")
 async def add_store_coins(interaction: discord.Interaction, store_name: str, member: discord.Member, amount: int):
     if not is_store_manager(interaction.user, store_name): return await interaction.response.send_message("🚫 Only store managers/admins can add store coins.", ephemeral=True)
     if store_name not in store_coins: store_coins[store_name] = {}
-    store_coins[store_name][member.id] = store_coins[store_name].get(member.id, 0) + amount
+    
+    m_id = str(member.id)
+    store_coins[store_name][m_id] = store_coins[store_name].get(m_id, 0) + amount
+    save_data()
     await interaction.response.send_message(f"✅ Added {amount} **{store_name}** coins to {member.mention}!", ephemeral=True)
 
 class PlayerShopView(discord.ui.View):
@@ -287,7 +321,7 @@ class PlayerShopButton(discord.ui.Button):
         self.price = price
 
     async def callback(self, interaction: discord.Interaction):
-        buyer_id = interaction.user.id
+        buyer_id = str(interaction.user.id)
         item_data = player_shops[self.store_name]["items"][self.item_name]
         
         if item_data["stock"] <= 0:
@@ -301,23 +335,21 @@ class PlayerShopButton(discord.ui.Button):
             pay_method = f"used {self.store_name} coins"
         elif g_coins >= self.price:
             global_coins[buyer_id] -= self.price
-            owner_id = player_shops[self.store_name]["owner_id"]
+            owner_id = str(player_shops[self.store_name]["owner_id"])
             global_coins[owner_id] = global_coins.get(owner_id, 0) + self.price
             pay_method = "used Global coins"
         else:
             return await interaction.response.send_message(f"❌ Not enough coins! You need {self.price} coins.", ephemeral=True)
 
-        item_data["stock"] -= 1 # Reduce stock
+        item_data["stock"] -= 1 
+        save_data()
         
-        # Green Embed Message
         embed = discord.Embed(title="🎉 Purchase Successful!", description=f"You bought **{self.item_name}** from **{self.store_name}** ({pay_method}).", color=discord.Color.green())
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # DM Buyer
         try: await interaction.user.send(f"🎉 Thank you for buying **{self.item_name}** from **{self.store_name}**!\n🔗 **Link:** {item_data['link']}")
         except: pass
 
-        # DM Store Owner & Admins
         owner_id = player_shops[self.store_name]["owner_id"]
         owner = interaction.guild.get_member(owner_id)
         if owner:
@@ -340,7 +372,9 @@ async def mystore_command(interaction: discord.Interaction, store_name: str):
 @bot.tree.command(name="addcoins", description="Add Global Coins for ALL shops (Admin only)")
 async def addcoins_command(interaction: discord.Interaction, member: discord.Member, amount: int):
     if not interaction.user.guild_permissions.administrator: return await interaction.response.send_message("🚫 Admins only.", ephemeral=True)
-    global_coins[member.id] = global_coins.get(member.id, 0) + amount
+    m_id = str(member.id)
+    global_coins[m_id] = global_coins.get(m_id, 0) + amount
+    save_data()
     await interaction.response.send_message(f"✅ Added {amount} Global Coins to {member.mention}.", ephemeral=True)
 
 @bot.tree.command(name="add-shop-item", description="Add item to Main Server Shop (Admin only)")
@@ -348,6 +382,7 @@ async def addcoins_command(interaction: discord.Interaction, member: discord.Mem
 async def add_shop_item(interaction: discord.Interaction, name: str, price: int, stock: int, link: str):
     if not interaction.user.guild_permissions.administrator: return await interaction.response.send_message("🚫 Admins only.", ephemeral=True)
     admin_shop_items[name] = {"price": price, "stock": stock, "link": link}
+    save_data()
     await interaction.response.send_message(f"✅ Added **{name}** to Main Shop!", ephemeral=True)
 
 @bot.tree.command(name="update-shop-item", description="Update an item in the Main Shop (Admin only)")
@@ -359,6 +394,7 @@ async def update_shop_item(interaction: discord.Interaction, name: str, new_stoc
     item = admin_shop_items[name]
     if new_stock is not None: item["stock"] = new_stock
     if new_link is not None: item["link"] = new_link
+    save_data()
     await interaction.response.send_message(f"✅ Updated **{name}**! New Stock: {item['stock']}", ephemeral=True)
 
 @bot.tree.command(name="clear", description="Clear messages (Admin only)")
