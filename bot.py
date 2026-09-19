@@ -46,6 +46,18 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
 
+@bot.event
+async def on_member_join(member):
+    channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    if channel:
+        await channel.send(f"ברוך הבא לשרת, {member.mention}! 🎉 שמחים שאתה כאן.")
+
+@bot.event
+async def on_member_remove(member):
+    channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    if channel:
+        await channel.send(f"ביי ביי {member.name}... 😢 נתגעגע.")
+
 # ==========================================
 #         ADVANCED GIVEAWAY SYSTEM
 # ==========================================
